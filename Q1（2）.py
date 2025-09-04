@@ -77,7 +77,7 @@ def prepare_q1_dataset(xlsx_path: str, sheet_name: str = "男胎检测数据",
     return d, design_X, y, meta
 
 #Step 1: 调用预处理函数
-clean_df, design_X, y, meta = prepare_q1_dataset("C:/Users/du230/Desktop/附件.xlsx")
+clean_df, design_X, y, meta = prepare_q1_dataset("./data/附件.xlsx")
 
 # Step 2: 打印元信息看看
 print(meta)   # 样本量、设计矩阵列名
