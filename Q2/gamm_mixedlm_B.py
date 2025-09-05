@@ -98,7 +98,7 @@ def drop_near_constant_and_collinear(X: pd.DataFrame, prefer_drop_prefix=("s",),
     return X[keep]
 
 def main(
-    excel_path="附件.xlsx",
+    excel_path="./data/附件.xlsx",
     sheet_name="男胎检测数据",
     col_id="孕妇代码",
     col_ga="检测孕周",
@@ -428,13 +428,31 @@ def main(
     plt.tight_layout()
     plt.show()
 
+    # 在 main() 末尾，return 出模型参数
+    return {
+        "beta": beta,
+        "cov_fe": cov_fe,
+        "X_columns": X.columns,
+        "spline_df": k,
+        "use_tensor_interact": use_tensor_interact,
+        # 新增：训练数据的支撑范围
+        "gest_min": float(df["gest_weeks"].min()),
+        "gest_max": float(df["gest_weeks"].max()),
+        "bmi_min": float(df["BMI"].min()),
+        "bmi_max": float(df["BMI"].max()),
+    }
+
+
+global_model = None
 
 if __name__ == "__main__":
-    # 默认：不加交互即可（use_tensor_interact=False），先获得稳定曲线
-    main(
+    global_model = main(
         excel_path="./data/附件.xlsx",
         sheet_name="男胎检测数据",
-        use_tensor_interact=False,  # 如需尝试交互改成 True
-        df_spline=None,            # 如要手动设样条自由度，填整数（3~8）
+        use_tensor_interact=False,
+        df_spline=None,
     )
-    
+else:
+    # 当作为模块被导入时，默认跑一次 main，生成 global_model
+    global_model = main()
+
