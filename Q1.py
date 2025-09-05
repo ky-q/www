@@ -6,7 +6,7 @@ plt.rcParams['font.sans-serif'] = ['SimHei']
 plt.rcParams['axes.unicode_minus'] = False    # 图片显示中文
 from patsy import dmatrix
 
-FILE_PATH = "C:/Users/du230/Desktop/附件.xlsx"
+FILE_PATH = "./data/附件.xlsx"
 
 # 把检测孕周的带w的值 转化成浮点值
 def parse_weeks(text):
@@ -53,6 +53,16 @@ X = pd.concat([
 # 稳健方差 用来OLS拟合
 y = male["Y_frac"].values
 ols = sm.OLS(y, X.values).fit(cov_type="HC3")
+
+# 打印t检验结果
+print("\n=========== T检验结果 ===========")
+print("模型系数的t检验结果：")
+print(ols.summary().tables[1])  # 显示系数、标准误、t值和p值
+print("\n显著性水平：")
+print("* p<0.05: 显著")
+print("** p<0.01: 非常显著")
+print("*** p<0.001: 极其显著")
+print("================================\n")
 
 # 构建预测函数（基于OLS系数）返回预测的Y浓度
 coefs = dict(zip(X.columns, ols.params))
