@@ -67,6 +67,9 @@ class CFG:
     OUT_GROUPS_PNG = "groups_on_curve.png"
     OUT_SENS_TG_PNG = "sensitivity_Tg_sigma.png"
 
+    USE_WAIT_PENALTY = True
+    WAIT_PENALTY_PER_WEEK = 1.0   # α，和 RETEST_COST 同量纲
+
 
 # =============== 工具函数 ===============
 def logistic(x): return 1.0 / (1.0 + np.exp(-x))
@@ -117,6 +120,13 @@ def smooth_ma(y, k=5):
         return y
     kernel = np.ones(k) / k
     return np.convolve(y, kernel, mode="same")
+
+def precompute_tstar0(predictor, bmi, t_min, thr, conf, sigma_m, t_support_min=None):
+    return np.array([
+        first_hit_time_for_b(predictor, float(b), t_min, CFG.T_MAX,
+                             thr, conf, sigma_m, t_support_min=t_support_min, step=CFG.STEP)
+        for b in bmi
+    ], dtype=float)
 
 
 # =============== 直接用第一问的 GAMM 预测器 ===============
@@ -262,17 +272,33 @@ def load_empirical_bmi(excel_path, sheet_name, col_id, col_bmi,
 
 
 # =============== 段成本（最原始：不加任何波动惩罚） ===============
-def precompute_loss_matrix(pred, bmi, Tcand, thr, conf, sigma_m, cost, t_support_min=None, w=None):
+def precompute_loss_matrix(pred, bmi, Tcand, thr, conf, sigma_m, cost, t_support_min=None, w=None, tstar0=None):
+    # 要求传入 tstar0 = precompute_tstar0(...)
     n, m = len(bmi), len(Tcand)
+    if tstar0 is None:
+        raise ValueError("precompute_loss_matrix 需要 tstar0")
     L = np.zeros((n, m))
-    for i, b in enumerate(bmi):
+    for i, t0 in enumerate(tstar0):
         for j, T in enumerate(Tcand):
-            L[i, j] = individual_loss(
-                pred, b, T, thr, conf, sigma_m, cost, t_support_min=t_support_min
-            )
+            # 复检：当 T < t*(b)
+            gap = max(0.0, t0 - T)
+            n_retests = int(np.ceil(gap / CFG.VISIT_INTERVAL))
+            n_retests = min(n_retests, CFG.MAX_RETESTS)
+            retest_cost = n_retests * cost
+
+            # 检出时刻与风险
+            t_hit = T if T >= t0 else t0
+            risk = piecewise_risk(t_hit)
+
+            # 等待罚：当 T > t*(b)
+            wait_pen = CFG.WAIT_PENALTY_PER_WEEK * max(0.0, T - t0) if CFG.USE_WAIT_PENALTY else 0.0
+
+            L[i, j] = CFG.FIRST_VISIT_COST + retest_cost + risk + wait_pen
+
     if w is not None:
-        L = (L.T * np.asarray(w, float)).T  # 行乘权重
+        L = (L.T * np.asarray(w, float)).T
     return L
+
 
 def build_segment_costs(L):
     """
@@ -319,6 +345,56 @@ def dp_optimal_partition(C, K, min_seg):
         j = i
     return segs[::-1]
 
+def eval_schedule(predictor, bmi, w_row, segments, T_candidates, argT,
+                  thr, conf, sigma_m, t_support_min=None):
+    def hit_time(b, T):
+        return expected_hit_time(predictor, b, T, thr, conf, sigma_m, t_support_min=t_support_min)
+
+    out = []
+    w_all = 0.0; cov_all = ret_rate_all = nrt_all = 0.0
+    risk_all = 0.0; late_all = 0.0; tbar_w = 0.0
+
+    for g, (i, j) in enumerate(segments, start=1):
+        T = float(T_candidates[argT[i, j]])
+        bs = bmi[i:j]; ws = w_row[i:j]
+        t_hit = np.array([hit_time(b, T) for b in bs])
+        need = (t_hit > T).astype(float)
+        nret = np.ceil(np.maximum(0.0, t_hit - T) / CFG.VISIT_INTERVAL)
+        nret = np.minimum(nret, CFG.MAX_RETESTS)
+        risk = np.array([piecewise_risk(t) for t in t_hit])
+
+        w = ws.sum()
+        cov = np.average(1 - need, weights=ws)                  # 首检覆盖率
+        ret_rate = np.average(need, weights=ws)                 # 复检率
+        nret_mean = np.average(nret, weights=ws)                # 人均复检次数
+        t_mean = np.average(t_hit, weights=ws)                  # 平均检出周
+        late = np.average((t_hit >= 28).astype(float), weights=ws)  # 晚期占比
+        risk_mean = np.average(risk, weights=ws)                # 期望风险
+        cost_mean = nret_mean * CFG.RETEST_COST + risk_mean     # 总成本（可选）
+
+        out.append({
+            "group": g, "T_g": T, "bmi_min": float(bs[0]), "bmi_max": float(bs[-1]),
+            "coverage": float(cov), "retest_rate": float(ret_rate),
+            "mean_retests": float(nret_mean), "mean_detect_week": float(t_mean),
+            "late_share": float(late), "exp_risk": float(risk_mean),
+            "exp_total_cost": float(cost_mean), "n_weight": float(w)
+        })
+
+        # overall (weighted by ws)
+        w_all += w
+        cov_all += cov * w; ret_rate_all += ret_rate * w; nrt_all += nret_mean * w
+        risk_all += risk_mean * w; late_all += late * w; tbar_w += t_mean * w
+
+    overall = {
+        "coverage": cov_all / w_all,
+        "retest_rate": ret_rate_all / w_all,
+        "mean_retests": nrt_all / w_all,
+        "mean_detect_week": tbar_w / w_all,
+        "late_share": late_all / w_all,
+        "exp_risk": risk_all / w_all
+    }
+    return pd.DataFrame(out), overall
+
 
 # =============== 主流程 ===============
 def main():
@@ -363,14 +439,24 @@ def main():
     CFG.MIN_SEG_SIZE = max(5, int(0.10 * len(bmi)))
 
     # 3) 段成本矩阵 & DP（固定段数）
-    L = precompute_loss_matrix(
-        predictor, bmi, T_candidates,
-        CFG.THRESHOLD, CFG.CONF_LEVEL, CFG.SIGMA_M, CFG.RETEST_COST,
-        t_support_min=t_support_min, w=w_row
-    )
+    tstar0 = precompute_tstar0(predictor, bmi, t_min, CFG.THRESHOLD, CFG.CONF_LEVEL,
+                           CFG.SIGMA_M, t_support_min=t_support_min)
+
+    L = precompute_loss_matrix(predictor, bmi, T_candidates, CFG.THRESHOLD,
+                            CFG.CONF_LEVEL, CFG.SIGMA_M, CFG.RETEST_COST,
+                            t_support_min=t_support_min, w=w_row, tstar0=tstar0)
+
     C, argT = build_segment_costs(L)
     segments = dp_optimal_partition(C, CFG.N_GROUPS, CFG.MIN_SEG_SIZE)
     best_Ts = [float(T_candidates[argT[i, j]]) for (i, j) in segments]
+
+    group_eval, overall = eval_schedule(
+        predictor, bmi, w_row, segments, T_candidates, argT,
+        CFG.THRESHOLD, CFG.CONF_LEVEL, CFG.SIGMA_M, t_support_min=t_support_min
+    )
+    group_eval.to_csv("group_eval.csv", index=False, encoding="utf-8-sig")
+    print("总体指标：", overall)
+
 
     # 4) 导出分组摘要
     rows = []
@@ -432,10 +518,12 @@ def main():
     # 7) 图3：敏感性（不同 sigma_m 下的 T_g；仍按真实分布权重）
     Tg_by_sigma = []
     for s in CFG.SIGMA_M_LIST:
+        tstar0 = precompute_tstar0(predictor, bmi, t_min, CFG.THRESHOLD, CFG.CONF_LEVEL,
+                                    s, t_support_min=t_support_min)
         Ls = precompute_loss_matrix(
             predictor, bmi, T_candidates,
             CFG.THRESHOLD, CFG.CONF_LEVEL, s, CFG.RETEST_COST,
-            t_support_min=t_support_min, w=w_row
+            t_support_min=t_support_min, w=w_row, tstar0=tstar0
         )
         Cs, argTs = build_segment_costs(Ls)
         segs_s = dp_optimal_partition(Cs, CFG.N_GROUPS, CFG.MIN_SEG_SIZE)

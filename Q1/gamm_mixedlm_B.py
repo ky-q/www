@@ -255,7 +255,10 @@ def main(
     labels = []
     for name, p in coef_df["p"].items():
         star = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
-        labels.append(f"{name} {star}")
+        if name == "BMI":
+            labels.append(f"γ {star}")
+        else:
+            labels.append(f"θ{name[1]} {star}")
     plt.yticks(y_pos, labels)
     plt.xlabel("系数（logit 空间）")
     title = "固定效应系数与95%CI（MixedLM）"
