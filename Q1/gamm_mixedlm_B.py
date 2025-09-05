@@ -69,6 +69,33 @@ def logit_clip(p, eps=1e-4):
     p = np.clip(p, eps, 1 - eps)
     return np.log(p / (1 - p))
 
+def drop_near_constant_and_collinear(X: pd.DataFrame, prefer_drop_prefix=("s",), tol_std=1e-10):
+    """返回满秩子集；先删近零方差，再按相关性贪心删列（优先样条列）"""
+    keep = list(X.columns)
+
+    # 1) 近零方差
+    for c in list(keep):
+        if np.nanstd(X[c].values) < tol_std:
+            keep.remove(c)
+            print(f"[clean] drop near-constant col: {c}")
+
+    # 2) 共线：直到满秩
+    def _prefer(col):
+        return any(col.startswith(p) for p in prefer_drop_prefix)  # 样条列优先丢
+
+    while np.linalg.matrix_rank(X[keep].values) < len(keep):
+        A = X[keep].values
+        corr = np.corrcoef(A, rowvar=False)
+        np.fill_diagonal(corr, 0.0)
+        i, j = np.unravel_index(np.nanargmax(np.abs(corr)), corr.shape)
+        c1, c2 = keep[i], keep[j]
+        # 按优先规则与方差小者丢弃
+        cand = sorted([c1, c2], key=lambda c: (not _prefer(c), X[c].std()))
+        drop_col = cand[0]
+        keep.remove(drop_col)
+        print(f"[collinear] drop {drop_col} (|corr|={abs(corr[i,j]):.6f})")
+
+    return X[keep]
 
 def main(
     excel_path="附件.xlsx",
@@ -133,6 +160,7 @@ def main(
         for c in S_train.columns:
             X[f"{c}:BMI"] = X[c] * X["BMI"]
 
+    X = drop_near_constant_and_collinear(X)
     y = df["y_logit"].values
     groups = df["mother_id"].values
 
@@ -189,9 +217,10 @@ def main(
     # （可选）交互整体
     inter_test = None
     if use_tensor_interact:
-        inter_cols = [c for c in X.columns if c.startswith("s") and ":BMI" in c]
-        print("\n[Wald] 样条×BMI 交互整体 H0: 交互项全部为 0")
-        inter_test = wald_joint(inter_cols)
+        inter_cols = [c for c in X.columns if c.endswith(":BMI")]
+        print("\n[Wald] 样条×BMI 交互整体 H0: 交互项=0")
+        wald_joint(inter_cols)
+
 
     # === 5) 可视化 1：系数森林图（固定效应，95% CI，高亮显著性） ===
     # 取固定效应（前 n_fe 个参数）
@@ -328,6 +357,56 @@ def main(
     print("  - gamm_effects_with_ci.png")
     print("  - gamm_mixedlm_effects.png")
 
+    # 定义绘制范围
+    g_grid = np.linspace(df["gest_weeks"].min(), df["gest_weeks"].max(), 40)
+    b_grid = np.linspace(df["BMI"].min(), df["BMI"].max(), 40)
+
+    # 网格化
+    G, B = np.meshgrid(g_grid, b_grid)
+    grid_df = pd.DataFrame({"gest_weeks": G.ravel(), "BMI": B.ravel()})
+
+    # 生成对应的样条矩阵
+    S_pred = dmatrix(
+        f"bs(gest_weeks, df={k}, degree=3, include_intercept=False)",
+        data=grid_df, return_type="dataframe", eval_env=1
+    )
+    S_pred.columns = [f"s{i+1}" for i in range(S_pred.shape[1])]
+
+    Xg = S_pred.copy()
+    Xg["BMI"] = grid_df["BMI"].values
+    if use_tensor_interact:
+        for c in S_pred.columns:
+            col = f"{c}:BMI"
+            if col in m.model.exog_names:
+                Xg[col] = Xg[c] * Xg["BMI"]
+
+    # 对齐列
+    Xg = Xg.reindex(columns=m.model.exog_names, fill_value=0.0)
+
+    # 预测值（logit → 概率）
+    # 预测值（logit → 概率）
+    yhat = m.predict(Xg)
+    Y_pred = 1 / (1 + np.exp(-yhat))
+    Z = np.asarray(Y_pred).reshape(G.shape) 
+
+
+    # ---------- 绘制 3D 曲面 ----------
+    fig = plt.figure(figsize=(9, 7))
+    ax = fig.add_subplot(111, projection="3d")
+
+    # 曲面
+    ax.plot_surface(G, B, Z, cmap="viridis", alpha=0.7)
+
+    # 原始数据散点
+    ax.scatter(df["gest_weeks"], df["BMI"], df["Y_frac"],
+            color="r", alpha=0.4, s=15, label="observed")
+
+    ax.set_xlabel("孕周 (weeks)")
+    ax.set_ylabel("BMI")
+    ax.set_zlabel("Y 浓度 (proportion)")
+    ax.set_title("GAMM 拟合的孕周-BMI-Y 浓度三维曲面")
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
     # 默认：不加交互即可（use_tensor_interact=False），先获得稳定曲线
