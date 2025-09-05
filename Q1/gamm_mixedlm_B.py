@@ -356,57 +356,78 @@ def main(
     print("  - gamm_coef_forest.png")
     print("  - gamm_effects_with_ci.png")
     print("  - gamm_mixedlm_effects.png")
+    # === 8) 导出“网格上的 logit 预测均值与标准误”到 pred_grid.csv ===
+    # 网格范围（可按需改密度）
+    g_grid = np.linspace(max(8.0, df["gest_weeks"].min()),
+                         min(30.0, df["gest_weeks"].max()), 46)  # 每 ~0.5 周一个点
+    b_grid = np.linspace(df["BMI"].min(), df["BMI"].max(), 41)
 
-    # 定义绘制范围
-    g_grid = np.linspace(df["gest_weeks"].min(), df["gest_weeks"].max(), 40)
-    b_grid = np.linspace(df["BMI"].min(), df["BMI"].max(), 40)
+    G, B = np.meshgrid(g_grid, b_grid, indexing="ij")
+    grid_df = pd.DataFrame({"gest_week": G.ravel(), "BMI": B.ravel()})
 
-    # 网格化
-    G, B = np.meshgrid(g_grid, b_grid)
-    grid_df = pd.DataFrame({"gest_weeks": G.ravel(), "BMI": B.ravel()})
-
-    # 生成对应的样条矩阵
+    # 生成网格样条矩阵（与训练时相同的 df=k、degree=3）
     S_pred = dmatrix(
-        f"bs(gest_weeks, df={k}, degree=3, include_intercept=False)",
+        f"bs(gest_week, df={k}, degree=3, include_intercept=False)",
         data=grid_df, return_type="dataframe", eval_env=1
     )
     S_pred.columns = [f"s{i+1}" for i in range(S_pred.shape[1])]
 
+    # 组装预测用设计矩阵 Xg：列对齐训练时的 X.columns（固定效应部分）
     Xg = S_pred.copy()
     Xg["BMI"] = grid_df["BMI"].values
     if use_tensor_interact:
         for c in S_pred.columns:
             col = f"{c}:BMI"
-            if col in m.model.exog_names:
+            if col in X.columns:
                 Xg[col] = Xg[c] * Xg["BMI"]
 
-    # 对齐列
-    Xg = Xg.reindex(columns=m.model.exog_names, fill_value=0.0)
+    # 对齐列并缺省填 0
+    Xg = Xg.reindex(columns=X.columns, fill_value=0.0)
 
-    # 预测值（logit → 概率）
-    # 预测值（logit → 概率）
-    yhat = m.predict(Xg)
-    Y_pred = 1 / (1 + np.exp(-yhat))
-    Z = np.asarray(Y_pred).reshape(G.shape) 
+    # 固定效应向量与其协方差（上文已算过 cov_fe；为稳妥再兜底一次）
+    fe_vec = beta.values  # (n_fe,)
+    if 'cov_fe' not in locals() or cov_fe is None:
+        try:
+            cov_all = np.asarray(m.cov_params())
+            cov_fe = cov_all[:len(X.columns), :len(X.columns)]
+        except Exception:
+            cov_fe = None
 
+    # 线性预测（logit 空间）与其标准误
+    eta_logit = Xg.values @ fe_vec  # (n_grid,)
+    if cov_fe is not None:
+        se_logit = np.sqrt(np.einsum("ij,jk,ik->i", Xg.values, cov_fe, Xg.values))
+    else:
+        # 若极端情形取不到协方差，就给 NaN，方便下游感知
+        se_logit = np.full_like(eta_logit, np.nan, dtype=float)
 
-    # ---------- 绘制 3D 曲面 ----------
+    # 导出 CSV：gest_week, BMI, eta_logit, se_logit
+    out_pred_grid = pd.DataFrame({
+        "gest_week": grid_df["gest_week"].values.astype(float),
+        "BMI": grid_df["BMI"].values.astype(float),
+        "eta_logit": eta_logit.astype(float),
+        "se_logit": se_logit.astype(float),
+    })
+    out_pred_grid.to_csv("pred_grid.csv", index=False, encoding="utf-8-sig")
+    print("已生成: pred_grid.csv")
+
+    # （可选）仍然保留 3D 曲面图，便于目视校验
+    Y_pred = 1 / (1 + np.exp(-eta_logit))
+    Z = Y_pred.reshape(G.shape)
+
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
-
-    # 曲面
     ax.plot_surface(G, B, Z, cmap="viridis", alpha=0.7)
-
-    # 原始数据散点
     ax.scatter(df["gest_weeks"], df["BMI"], df["Y_frac"],
-            color="r", alpha=0.4, s=15, label="observed")
-
+               color="r", alpha=0.4, s=15, label="observed")
     ax.set_xlabel("孕周 (weeks)")
     ax.set_ylabel("BMI")
     ax.set_zlabel("Y 浓度 (proportion)")
     ax.set_title("GAMM 拟合的孕周-BMI-Y 浓度三维曲面")
     plt.tight_layout()
     plt.show()
+
 
 if __name__ == "__main__":
     # 默认：不加交互即可（use_tensor_interact=False），先获得稳定曲线
