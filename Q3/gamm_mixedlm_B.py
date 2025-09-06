@@ -2,7 +2,16 @@
 """
 GAMM 近似：B 样条 + MixedLM 随机截距（方法 B）
 - 因变量：Y染色体浓度（比例），用 logit 变换
-- 固定效应：s(孕周) + BMI（可选：s(孕周)×BMI 的逐列交互）
+- 固定效def main(
+    excel_path="./data/附件.xlsx",
+    sheet_name="男胎检测数据",
+    col_id="孕妇代码",
+    col_ga="检测孕周",
+    col_bmi="孕妇BMI",
+    col_y="Y染色体浓度",
+    use_tensor_interact=False,  # True：加入"样条×BMI"的逐列交互；False：只用 s(孕周)+BMI
+    df_spline=None,  # None 自动选择；否则传入整数（3~8 常用）
+):BMI（可选：s(孕周)×BMI 的逐列交互）
 - 随机效应：孕妇代码 的随机截距（处理同一孕妇多次检测的相关性）
 - 显著性（数值 + 可视化）：
   * Wald 单项（BMI）
@@ -98,7 +107,7 @@ def drop_near_constant_and_collinear(X: pd.DataFrame, prefer_drop_prefix=("s",),
     return X[keep]
 
 def main(
-    excel_path="附件.xlsx",
+    excel_path="./data/附件.xlsx",
     sheet_name="男胎检测数据",
     col_id="孕妇代码",
     col_ga="检测孕周",
@@ -119,6 +128,18 @@ def main(
             col_y: "Y_frac",
         }
     )
+    
+    # 常见的列名
+    if "年龄" in df.columns:
+        df.rename(columns={"年龄": "age"}, inplace=True)
+    if "身高" in df.columns:
+        df.rename(columns={"身高": "height"}, inplace=True)
+    if "体重" in df.columns:
+        df.rename(columns={"体重": "weight"}, inplace=True)
+    if "唯一比对的读段数" in df.columns:
+        df.rename(columns={"唯一比对的读段数": "unique_reads"}, inplace=True)
+    if "GC含量" in df.columns:
+        df.rename(columns={"GC含量": "gc_content"}, inplace=True)
 
     # 孕周
     gest = df["gest_raw"].apply(convert_pregnancy_week)
@@ -129,7 +150,59 @@ def main(
     df["mother_id"] = df["mother_id"].astype(str)
     df["BMI"] = pd.to_numeric(df["BMI"], errors="coerce")
     df["Y_frac"] = pd.to_numeric(df["Y_frac"], errors="coerce")
+    
+    # 扩展协变量清洗
+    if "age" in df.columns:
+        df["age"] = pd.to_numeric(df["age"], errors="coerce")
+    else:
+        df["age"] = np.nan
+        
+    if "height" in df.columns:
+        df["height"] = pd.to_numeric(df["height"], errors="coerce")
+        # 保存原始height用于体重残差计算
+        df["height_orig"] = df["height"].copy()
+        # 标准化height (Z-score)
+        height_mean = df["height"].mean()
+        height_std = df["height"].std()
+        if height_std > 0:
+            df["height"] = (df["height"] - height_mean) / height_std
+    else:
+        df["height"] = np.nan
+        df["height_orig"] = np.nan
+        
+    if "weight" in df.columns:
+        df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+    else:
+        df["weight"] = np.nan
+        
+    if "unique_reads" in df.columns:
+        df["unique_reads"] = pd.to_numeric(df["unique_reads"], errors="coerce")
+        # 转换为百万级别，避免系数过小
+        df["unique_reads"] = df["unique_reads"] / 1e6
+    else:
+        df["unique_reads"] = np.nan
+        
+    if "gc_content" in df.columns:
+        df["gc_content"] = pd.to_numeric(df["gc_content"], errors="coerce")
+        # 标准化gc_content (Z-score)
+        gc_mean = df["gc_content"].mean()
+        gc_std = df["gc_content"].std()
+        if gc_std > 0:
+            df["gc_content"] = (df["gc_content"] - gc_mean) / gc_std
+    else:
+        df["gc_content"] = np.nan
+    
+    # 只保留必要字段的非空记录
     df = df.dropna(subset=["mother_id", "gest_weeks", "BMI", "Y_frac"]).copy()
+    
+    # 创建体重残差（与BMI去相关）
+    if not df["weight"].isna().all() and not df["height_orig"].isna().all():
+        # 预测体重（基于BMI和身高）- 使用原始身高值
+        model_weight = np.polyfit(df["BMI"] * (df["height_orig"]/100)**2, df["weight"], 1)
+        expected_weight = model_weight[0] * df["BMI"] * (df["height_orig"]/100)**2 + model_weight[1]
+        df["weight_residual"] = df["weight"] - expected_weight
+    else:
+        df["weight_residual"] = np.nan
 
     # 因变量 logit 变换
     df["y_logit"] = logit_clip(df["Y_frac"].values, eps=1e-4)
@@ -151,7 +224,7 @@ def main(
     )
     S_train.columns = [f"s{i+1}" for i in range(S_train.shape[1])]
 
-    # 只用样条与 BMI（不加常数，避免与样条共线）
+    # 先用样条与 BMI（不加常数，避免与样条共线）
     X = S_train.copy()
     X["BMI"] = df["BMI"].values
 
@@ -159,6 +232,26 @@ def main(
     if use_tensor_interact:
         for c in S_train.columns:
             X[f"{c}:BMI"] = X[c] * X["BMI"]
+    
+    # 可选：加入扩展协变量
+    # 年龄
+    if "age" in df.columns and not df["age"].isna().all():
+        X["age"] = df["age"].values
+    
+    # 身高（可能与BMI有共线性，但由VIF自动处理）
+    if "height" in df.columns and not df["height"].isna().all():
+        X["height"] = df["height"].values
+    
+    # 体重残差（与BMI去相关）
+    if "weight_residual" in df.columns and not df["weight_residual"].isna().all():
+        X["weight_residual"] = df["weight_residual"].values
+    
+    # 质量指标
+    if "unique_reads" in df.columns and not df["unique_reads"].isna().all():
+        X["unique_reads"] = df["unique_reads"].values
+        
+    if "gc_content" in df.columns and not df["gc_content"].isna().all():
+        X["gc_content"] = df["gc_content"].values
 
     X = drop_near_constant_and_collinear(X)
     y = df["y_logit"].values
@@ -428,13 +521,58 @@ def main(
     plt.tight_layout()
     plt.show()
 
+    # 在 main() 末尾，return 出模型参数
+    
+    # 为planB_constrained.py创建一个不含weight_residual和age的列表
+    filtered_columns = [col for col in X.columns if col != 'weight_residual' and col != 'age']
+    # 为planB_constrained.py创建一个不含weight_residual和age的beta向量
+    filtered_beta = beta.loc[filtered_columns]
+    # 为planB_constrained.py创建一个不含weight_residual和age的协方差矩阵
+    if cov_fe is not None:
+        indices = [i for i, col in enumerate(X.columns) if col in filtered_columns]
+        filtered_cov_fe = cov_fe[np.ix_(indices, indices)]
+    else:
+        filtered_cov_fe = None
+    
+    return {
+        "beta": filtered_beta,  # 只保留不含weight_residual和age的系数
+        "cov_fe": filtered_cov_fe,  # 只保留不含weight_residual和age的协方差
+        "X_columns": filtered_columns,  # 只保留不含weight_residual和age的列名
+        "spline_df": k,
+        "use_tensor_interact": use_tensor_interact,
+        "use_extended_covars": True,  # 固定为True，因为我们在模型中仍保留了部分扩展变量
+        # 新增：训练数据的支撑范围
+        "gest_min": float(df["gest_weeks"].min()),
+        "gest_max": float(df["gest_weeks"].max()),
+        "bmi_min": float(df["BMI"].min()),
+        "bmi_max": float(df["BMI"].max()),
+        # 扩展协变量的代表值（用于预测时设置默认值）
+        "default_age": None,  # 不返回age的默认值
+        "default_height": 0.0,  # 因为已标准化为Z-score，默认值为0
+        "default_weight_residual": None,  # 不返回weight_residual的默认值
+        "default_unique_reads": float(df["unique_reads"].median()) if not df["unique_reads"].isna().all() else None,
+        "default_gc_content": 0.0,  # 因为已标准化为Z-score，默认值为0
+    }
+
+
+global_model = None
 
 if __name__ == "__main__":
-    # 默认：不加交互即可（use_tensor_interact=False），先获得稳定曲线
-    main(
+    global_model = main(
         excel_path="./data/附件.xlsx",
         sheet_name="男胎检测数据",
-        use_tensor_interact=False,  # 如需尝试交互改成 True
-        df_spline=None,            # 如要手动设样条自由度，填整数（3~8）
+        col_id="孕妇代码",
+        col_ga="检测孕周",
+        col_bmi="孕妇BMI",
+        col_y="Y染色体浓度",
+        use_tensor_interact=True,
+        df_spline=None
     )
-    
+else:
+    # 当作为模块被导入时，默认跑一次 main，生成 global_model
+    global_model = main(
+        excel_path="./data/附件.xlsx",
+        sheet_name="男胎检测数据",
+        use_tensor_interact=True
+    )
+
