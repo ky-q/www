@@ -321,20 +321,7 @@ class EnhancedGAMMPredictor:
                 
         # Create DataFrame with explicit index
         df_new = pd.DataFrame({"gest_weeks": t, "BMI": b}, index=range(len(t)))
-        
-        # 设置其他协变量的默认值（若用户未提供）
-        if hasattr(self, 'use_extended_covars') and self.use_extended_covars:
-            if age is None and "age" in self.cols and self.default_age is not None:
-                age = self.default_age
-            if height is None and "height" in self.cols and self.default_height is not None:
-                height = self.default_height
-            if weight_residual is None and "weight_residual" in self.cols:
-                weight_residual = self.default_weight_residual
-            if unique_reads is None and "unique_reads" in self.cols and self.default_unique_reads is not None:
-                unique_reads = self.default_unique_reads
-            if gc_content is None and "gc_content" in self.cols and self.default_gc_content is not None:
-                gc_content = self.default_gc_content
-                
+
         S = dmatrix(
             f"bs(gest_weeks, df={self.k}, degree=3, include_intercept=False)",
             data=df_new, return_type="dataframe", eval_env=1
@@ -348,19 +335,6 @@ class EnhancedGAMMPredictor:
                 col = f"{c}:BMI"
                 if col in self.cols:
                     Xg[col] = Xg[c] * Xg["BMI"]
-        
-        # 添加扩展协变量
-        if hasattr(self, 'use_extended_covars') and self.use_extended_covars:
-            if "age" in self.cols and age is not None:
-                Xg["age"] = np.full_like(t, age, dtype=float)
-            if "height" in self.cols and height is not None:
-                Xg["height"] = np.full_like(t, height, dtype=float)
-            if "weight_residual" in self.cols and weight_residual is not None:
-                Xg["weight_residual"] = np.full_like(t, weight_residual, dtype=float)
-            if "unique_reads" in self.cols and unique_reads is not None:
-                Xg["unique_reads"] = np.full_like(t, unique_reads, dtype=float)
-            if "gc_content" in self.cols and gc_content is not None:
-                Xg["gc_content"] = np.full_like(t, gc_content, dtype=float)
                 
         Xg = Xg.reindex(columns=self.cols, fill_value=0.0)
         eta = Xg.values @ self.beta
@@ -369,7 +343,6 @@ class EnhancedGAMMPredictor:
         else:
             se = np.full_like(eta, np.nan)
             
-        # If input was scalar, return scalar output
         if is_scalar:
             return eta[0:1], se[0:1]
         else:

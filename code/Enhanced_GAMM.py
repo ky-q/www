@@ -17,29 +17,21 @@ from config.constant import CFG
 plt.rcParams["font.sans-serif"] = ["SimHei", "Arial"]
 plt.rcParams["axes.unicode_minus"] = False
 
-class DataPreprocessor:
-    @staticmethod
-    def standardize(series):
-        """标准化为Z-score"""
-        if series.std() > 0:
-            return (series - series.mean()) / series.std()
-        return series - series.mean()
 
-    @staticmethod
-    def process_extended_covariates(df):
-        """处理扩展协变量"""
-        # 常见的列名
-        if "年龄" in df.columns:
-            df.rename(columns={"年龄": "age"}, inplace=True)
-        if "身高" in df.columns:
-            df.rename(columns={"身高": "height"}, inplace=True)
-        if "体重" in df.columns:
-            df.rename(columns={"体重": "weight"}, inplace=True)
-        if "唯一比对的读段数" in df.columns:
-            df.rename(columns={"唯一比对的读段数": "unique_reads"}, inplace=True)
-        if "GC含量" in df.columns:
-            df.rename(columns={"GC含量": "gc_content"}, inplace=True)
-        return df
+def process_extended_covariates(df):
+    """处理扩展协变量"""
+    # 常见的列名
+    if "年龄" in df.columns:
+        df.rename(columns={"年龄": "age"}, inplace=True)
+    if "身高" in df.columns:
+        df.rename(columns={"身高": "height"}, inplace=True)
+    if "体重" in df.columns:
+        df.rename(columns={"体重": "weight"}, inplace=True)
+    if "唯一比对的读段数" in df.columns:
+        df.rename(columns={"唯一比对的读段数": "unique_reads"}, inplace=True)
+    if "GC含量" in df.columns:
+        df.rename(columns={"GC含量": "gc_content"}, inplace=True)
+    return df
 
 def load_data(excel_path, sheet_name, col_id, col_ga, col_bmi, col_y):
     """增强版数据加载函数"""
@@ -55,7 +47,7 @@ def load_data(excel_path, sheet_name, col_id, col_ga, col_bmi, col_y):
         }
     )
     # 处理扩展协变量
-    df = DataPreprocessor.process_extended_covariates(df)
+    df = process_extended_covariates(df)
 
     # 孕周
     gest = df["gest_raw"].apply(convert_pregnancy_week)
