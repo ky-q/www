@@ -64,7 +64,7 @@ class CFG:
     COVERAGE_PENALTY_WEIGHT = 100.0  # 恢复较大权重以确保约束有效
 
     # ---------- 分段设置（固定段数） ----------
-    N_GROUPS = 4
+    N_GROUPS = 3
     MIN_SEG_SIZE = 5
 
     # ---------- 下限策略（二选一；默认软下限） ----------

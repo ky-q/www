@@ -1,15 +1,13 @@
 class CFG:
     EXCEL_PATH = "./data/附件.xlsx"
     SHEET_NAME = "男胎检测数据"
-    Q1PicPath = "./img/Q1/"
-    Q2PicPath = "./img/Q2/"
-    Q3PicPath = "./img/Q3/"
+    Q1PicPath = "./output/Q1/"
+    Q2PicPath = "./output/Q2/"
+    Q3PicPath = "./output/Q3/"
 
     COL_ID = "孕妇代码"
     COL_BMI = "孕妇BMI"
-    
-    USE_EMPIRICAL_BMI = True      # True: 使用 Excel 实际分布；False: 使用等距网格
-    DEDUP_BY_MOTHER = True        # 按孕妇去重（用该孕妇 BMI 的中位数）
+
     MAX_BMI_POINTS = 250          # 若人数过多，压缩为至多这些代表点（等频分箱），并带权重
 
     # ---------- 阈值与不确定性 ----------
@@ -31,9 +29,7 @@ class CFG:
     N_GROUPS = 4
     MIN_SEG_SIZE = 5
 
-    # ---------- 下限策略（二选一；默认软下限） ----------
-    HARD_FLOOR = False          # True=硬下限：不在训练下限之前搜索
-    SOFT_FLOOR = True           # True=软下限：允许更早，但人为增大 SE
+    # ---------- 下限策略 ----------
     EXTRAP_SIGMA_PER_WEEK = 0.45
     SOFT_BAND = 1.5
     SOFT_BETA = 4.0
@@ -48,5 +44,4 @@ class CFG:
     OUT_GROUPS_PNG = "groups_on_curve.png"
     OUT_SENS_TG_PNG = "sensitivity_Tg_sigma.png"
 
-    USE_WAIT_PENALTY = True
     WAIT_PENALTY_PER_WEEK = 1.0   # α，和 RETEST_COST 同量纲

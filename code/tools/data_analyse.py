@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from patsy import dmatrix
 from config.constant import CFG
 from tools.data_process import piecewise_risk, pava_monotone_increasing, smooth_ma
-from tools.model_utils import expected_hit_time, first_hit_time_for_b, precompute_loss_matrix, dp_optimal_partition, precompute_tstar0, build_segment_costs
+from tools.model_utils import expected_hit_time, first_hit_time_for_b, precompute_loss_matrix, dp_optimal_partition, precompute_tstar0, build_segment_costs_simple, precompute_cover_indicator, build_segment_costs_with_coverage
 
 plt.rcParams["font.sans-serif"] = ["SimHei", "Arial"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -32,7 +32,7 @@ def wald_joint(names, m, X):
             return None
         
         
-def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact):
+def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact, save_dir):
     # 可视化 1：系数森林图（固定效应，95% CI，高亮显著性）
     # 取固定效应（前 n_fe 个参数）
     fe_names = list(X.columns)
@@ -76,7 +76,7 @@ def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact):
     plt.title(title)
     plt.tight_layout()
     # 保存到Q1文件夹
-    plt.savefig(CFG.PicPath + "gamm_coef_forest.png", dpi=200)
+    plt.savefig(save_dir + "gamm_coef_forest.png", dpi=200)
 
 
     # 可视化 2：效应曲线（回到比例空间）+ 95% 置信带（固定效应）
@@ -137,7 +137,7 @@ def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact):
     plt.title(title2)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(CFG.Q1PicPath + "gamm_effects_with_ci.png", dpi=200)
+    plt.savefig(save_dir + "gamm_effects_with_ci.png", dpi=200)
 
 
     # 可视化 3： 3D 曲面图，便于目视校验
@@ -180,22 +180,18 @@ def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact):
     ax.set_zlabel("Y 浓度 (proportion)")
     ax.set_title("GAMM 拟合的孕周-BMI-Y 浓度三维曲面")
     plt.tight_layout()
-    plt.savefig(CFG.Q1PicPath + "gamm_3d_surface.png", dpi=200)
+    plt.savefig(save_dir + "gamm_3d_surface.png", dpi=200)
     plt.show()
 
 
-def load_empirical_bmi(excel_path, sheet_name, col_id, col_bmi,
-                       dedup_by_mother=True, max_points=250):
+def load_empirical_bmi(excel_path, sheet_name, col_id, col_bmi, max_points=250):
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
     df = df.rename(columns={col_id: "mother_id", col_bmi: "BMI"})
     df["mother_id"] = df["mother_id"].astype(str)
     df["BMI"] = pd.to_numeric(df["BMI"], errors="coerce")
     df = df.dropna(subset=["mother_id", "BMI"])
-    if dedup_by_mother:
-        # 按孕妇去重：用该孕妇出现记录的 BMI 中位数（更鲁棒）
-        bmi_series = df.groupby("mother_id")["BMI"].median().values
-    else:
-        bmi_series = df["BMI"].values
+    # 按孕妇去重：用该孕妇出现记录的 BMI 中位数（更鲁棒）
+    bmi_series = df.groupby("mother_id")["BMI"].median().values
 
     bmi_series = np.asarray(bmi_series, float)
     bmi_series = bmi_series[np.isfinite(bmi_series)]
@@ -296,9 +292,6 @@ def draw_q2_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_cand
         t_star = pava_monotone_increasing(bmi_plot, t_star)
         t_star = smooth_ma(t_star, k=5)
         plt.plot(bmi_plot, t_star, label=f"sigma_m={s}")
-    if CFG.HARD_FLOOR:
-        plt.axhline(t_min, ls="--", alpha=.4)
-        plt.text(bmi_plot[1], t_min + 0.25, f"最早可用周={t_min:.1f}", fontsize=10)
     plt.xlabel("BMI"); plt.ylabel("最早达标周 t*")
     plt.title("达标周曲线  t*(BMI)")
     plt.grid(True, alpha=.3); 
@@ -319,8 +312,6 @@ def draw_q2_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_cand
         plt.axvspan(bmi[i], bmi[j - 1], alpha=0.08)
         plt.hlines(Tg, bmi[i], bmi[j - 1], linestyles="dashed")
         plt.text((bmi[i] + bmi[j - 1]) / 2, Tg + 0.25, f"T={Tg:.1f}", ha="center")
-    if CFG.HARD_FLOOR:
-        plt.axhline(t_min, ls="--", alpha=.3)
     plt.xlabel("BMI"); plt.ylabel("孕周 / 周")
     plt.title("最优 BMI 分组与统一时点（固定段数，按真实分布加权）")
     plt.legend(); 
@@ -333,12 +324,9 @@ def draw_q2_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_cand
     for s in CFG.SIGMA_M_LIST:
         tstar0 = precompute_tstar0(predictor, bmi, t_min, CFG.THRESHOLD, CFG.CONF_LEVEL,
                                     s, t_support_min=t_support_min)
-        Ls = precompute_loss_matrix(
-            predictor, bmi, T_candidates,
-            CFG.THRESHOLD, CFG.CONF_LEVEL, s, CFG.RETEST_COST,
-            t_support_min=t_support_min, w=w_row, tstar0=tstar0
+        Ls = precompute_loss_matrix(bmi, T_candidates, CFG.RETEST_COST, w=w_row, tstar0=tstar0
         )
-        Cs, argTs = build_segment_costs(Ls)
+        Cs, argTs = build_segment_costs_simple(Ls)
         segs_s = dp_optimal_partition(Cs, CFG.N_GROUPS, CFG.MIN_SEG_SIZE)
         Tg_by_sigma.append([float(T_candidates[argTs[i, j]]) for (i, j) in segs_s])
 
@@ -352,3 +340,81 @@ def draw_q2_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_cand
     plt.legend()
     plt.tight_layout(); 
     plt.savefig(CFG.Q2PicPath + CFG.OUT_SENS_TG_PNG, dpi=160); plt.close()
+
+def draw_q3_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_candidates, w_row, CFG):
+    # 5) 图1：t*(BMI) 曲线（用连续网格画，便于阅读；不影响分段权重）
+    bmi_plot = np.linspace(min(bmi), max(bmi), 200)
+    plt.figure(figsize=(7.6, 5.2))
+    for s in CFG.SIGMA_M_LIST:
+        t_star = [
+            first_hit_time_for_b(predictor, float(b), t_min, CFG.T_MAX,
+                                 CFG.THRESHOLD, CFG.CONF_LEVEL, s,
+                                 t_support_min=t_support_min, step=CFG.STEP)
+            for b in bmi_plot
+        ]
+        t_star = np.array([np.nan if v is None else float(v) for v in t_star])
+        t_star = pava_monotone_increasing(bmi_plot, t_star)
+        t_star = smooth_ma(t_star, k=5)
+        plt.plot(bmi_plot, t_star, label=f"sigma_m={s}")
+    plt.xlabel("BMI"); plt.ylabel("最早达标周 t*")
+    plt.title("达标周曲线  t*(BMI)")
+    plt.grid(True, alpha=.3); 
+    plt.legend()
+    plt.tight_layout(); 
+    plt.savefig(CFG.OUT_DIR + "t_star_vs_bmi.png", dpi=160); 
+
+    # 6) 图2：最优分组与统一时点（叠加 t*(b)）
+    plt.figure(figsize=(7.8, 5.3))
+    t_star = [
+        first_hit_time_for_b(predictor, float(b), t_min, CFG.T_MAX,
+                             CFG.THRESHOLD, CFG.CONF_LEVEL, CFG.SIGMA_M,
+                             t_support_min=t_support_min, step=CFG.STEP)
+        for b in bmi_plot
+    ]
+    plt.plot(bmi_plot, t_star, label="t*(b)", lw=2)
+    for (i, j), Tg in zip(segments, best_Ts):
+        plt.axvspan(bmi[i], bmi[j - 1], alpha=0.08)
+        plt.hlines(Tg, bmi[i], bmi[j - 1], linestyles="dashed")
+        plt.text((bmi[i] + bmi[j - 1]) / 2, Tg + 0.25, f"T={Tg:.1f}", ha="center")
+    plt.xlabel("BMI"); plt.ylabel("孕周 / 周")
+    plt.title("最优 BMI 分组与统一时点（固定段数，按真实分布加权）")
+    plt.legend(); plt.grid(True, alpha=.3)
+    plt.tight_layout(); 
+    plt.savefig(CFG.OUT_DIR + "groups_on_curve.png", dpi=160); 
+    plt.close()
+
+    # 7) 图3：敏感性（不同 sigma_m 下的 T_g；仍按真实分布权重）
+    Tg_by_sigma = []
+    for s in CFG.SIGMA_M_LIST:
+        tstar0 = precompute_tstar0(predictor, bmi, t_min, CFG.THRESHOLD, CFG.CONF_LEVEL,
+                                    s, t_support_min=t_support_min)
+        Ls = precompute_loss_matrix(bmi, T_candidates, CFG.RETEST_COST, w=w_row, tstar0=tstar0)
+
+        cover_s = precompute_cover_indicator(
+            predictor, bmi, T_candidates,
+            CFG.THRESHOLD, CFG.CONF_LEVEL, s,
+            t_support_min=t_support_min
+        )
+        Cs, argTs = build_segment_costs_with_coverage(
+            Ls, cover_s, w_row,
+            cov_target=CFG.COVERAGE_TARGET,
+            lambda_cov=CFG.COVERAGE_PENALTY_WEIGHT,
+            T_candidates=T_candidates,
+            tstar0=tstar0,
+            upper_margin=0.0
+        )
+
+        segs_s = dp_optimal_partition(Cs, CFG.N_GROUPS, CFG.MIN_SEG_SIZE)
+        Tg_by_sigma.append([float(T_candidates[argTs[i, j]]) for (i, j) in segs_s])
+
+    plt.figure(figsize=(7.2, 4.8))
+    for idx in range(CFG.N_GROUPS):
+        vals = [Tg[idx] for Tg in Tg_by_sigma]
+        plt.plot(CFG.SIGMA_M_LIST, vals, marker="o", label=f"组{idx+1}")
+    plt.xlabel("sigma_m (logit)"); plt.ylabel("组统一时点 T_g / 周")
+    plt.title("T_g 的测量误差敏感性（固定段数，按真实分布加权）")
+    plt.grid(True, alpha=.3); 
+    plt.legend()
+    plt.tight_layout(); 
+    plt.savefig(CFG.OUT_DIR + "sensitivity_Tg_sigma.png", dpi=160); 
+    plt.close()

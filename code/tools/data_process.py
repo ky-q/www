@@ -98,19 +98,3 @@ def smooth_ma(y, k=5):
     kernel = np.ones(k) / k
     return np.convolve(y, kernel, mode="same")
 
-# =============== 置信下界 ===============
-def _softplus(x, beta=4.0):
-    return (1.0 / beta) * np.log1p(np.exp(beta * x))
-
-def lcl_prob_from_logit(eta, se, conf, sigma_m, t=None, t_support_min=None):
-    z = norm.ppf(conf)
-    extra_var = 0.0
-    if CFG.SOFT_FLOOR and (t is not None) and (t_support_min is not None):
-        t = np.asarray(t, dtype=float)
-        d = (t_support_min + CFG.SOFT_BAND) - t
-        gap = _softplus(d, beta=CFG.SOFT_BETA)
-        extra_sigma = CFG.EXTRAP_SIGMA_PER_WEEK * (gap ** CFG.SOFT_POWER)
-        extra_var = (extra_sigma ** 2)
-    s_eff = np.sqrt(se**2 + sigma_m**2 + extra_var)
-    return 1.0 / (1.0 + np.exp(-(eta - z * s_eff)))
-

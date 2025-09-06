@@ -109,7 +109,7 @@ def main(
     cov_fe = cov_all[:n_fe, :n_fe]
 
     if __name__ == "__main__":
-        draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact)
+        draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact, CFG.Q1PicPath)
     return {
         "beta": beta,
         "cov_fe": cov_fe,

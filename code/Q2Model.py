@@ -2,13 +2,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import norm
-from RAMM import global_model  # 第一问里定义好的 dict
+from GAMM import global_model  # 第一问里定义好的 dict
 from tools.data_process import piecewise_risk
 from tools.data_analyse import eval_schedule, load_empirical_bmi, draw_q2_pics
 from tools.model_utils import (
     GAMMPredictor, expected_hit_time, 
     precompute_loss_matrix, dp_optimal_partition, precompute_tstar0, 
-    build_segment_costs
+    build_segment_costs_simple
 )
 from config.constant import CFG
 
@@ -43,28 +43,19 @@ def main():
     bmi_max = float(global_model.get("bmi_max", 45.0))
 
     # 下限策略
-    if CFG.HARD_FLOOR:
-        t_min = max(CFG.T_MIN_RAW, gest_min)
-        t_support_min = gest_min
-    else:
-        t_min = CFG.T_MIN_RAW
-        t_support_min = gest_min if CFG.SOFT_FLOOR else None
+    t_min = CFG.T_MIN_RAW
+    t_support_min = gest_min
 
     # 候选统一时点 T
     t_min_for_search = max(CFG.T_MIN_RAW, gest_min - 1.0)
     T_candidates = np.arange(t_min_for_search, CFG.T_MAX + 1e-9, CFG.STEP)
 
     # 2) BMI：使用 Excel 的真实分布（按孕妇去重；可压缩并带权重）
-    if CFG.USE_EMPIRICAL_BMI:
-        bmi_emp, w_emp = load_empirical_bmi(
-            CFG.EXCEL_PATH, CFG.SHEET_NAME, CFG.COL_ID, CFG.COL_BMI,
-            dedup_by_mother=CFG.DEDUP_BY_MOTHER, max_points=CFG.MAX_BMI_POINTS
-        )
-        bmi = bmi_emp
-        w_row = w_emp
-    else:
-        bmi = np.linspace(bmi_min, bmi_max, 60)
-        w_row = np.ones_like(bmi, dtype=float)
+    bmi_emp, w_emp = load_empirical_bmi(
+        CFG.EXCEL_PATH, CFG.SHEET_NAME, CFG.COL_ID, CFG.COL_BMI, max_points=CFG.MAX_BMI_POINTS
+    )
+    bmi = bmi_emp
+    w_row = w_emp
 
     # 最小段长按“代表点数量”设定
     CFG.MIN_SEG_SIZE = max(5, int(0.10 * len(bmi)))
@@ -73,11 +64,9 @@ def main():
     tstar0 = precompute_tstar0(predictor, bmi, t_min, CFG.THRESHOLD, CFG.CONF_LEVEL,
                            CFG.SIGMA_M, t_support_min=t_support_min)
 
-    L = precompute_loss_matrix(predictor, bmi, T_candidates, CFG.THRESHOLD,
-                            CFG.CONF_LEVEL, CFG.SIGMA_M, CFG.RETEST_COST,
-                            t_support_min=t_support_min, w=w_row, tstar0=tstar0)
+    L = precompute_loss_matrix(bmi, T_candidates, CFG.RETEST_COST, w=w_row, tstar0=tstar0)
 
-    C, argT = build_segment_costs(L)
+    C, argT = build_segment_costs_simple(L)
     segments = dp_optimal_partition(C, CFG.N_GROUPS, CFG.MIN_SEG_SIZE)
     best_Ts = [float(T_candidates[argT[i, j]]) for (i, j) in segments]
 
@@ -85,7 +74,7 @@ def main():
         predictor, bmi, w_row, segments, T_candidates, argT,
         CFG.THRESHOLD, CFG.CONF_LEVEL, CFG.SIGMA_M, t_support_min=t_support_min
     )
-    group_eval.to_csv("group_eval.csv", index=False, encoding="utf-8-sig")
+    group_eval.to_csv(CFG.Q2PicPath + "group_eval.csv", index=False, encoding="utf-8-sig")
     print("总体指标：", overall)
 
 
@@ -100,8 +89,8 @@ def main():
             "n_weight": float(np.sum(w_row[i:j]))
         })
     summary = pd.DataFrame(rows)
-    summary.to_csv(CFG.OUT_GROUP_SUMMARY, index=False, encoding="utf-8-sig")
-    print("已生成:", CFG.OUT_GROUP_SUMMARY)
+    summary.to_csv(CFG.Q2PicPath + CFG.OUT_GROUP_SUMMARY, index=False, encoding="utf-8-sig")
+    print("已生成:",CFG.Q2PicPath + CFG.OUT_GROUP_SUMMARY)
     print(summary)
 
     draw_q2_pics(bmi, predictor, t_min, t_support_min, segments, best_Ts, T_candidates, w_row)
