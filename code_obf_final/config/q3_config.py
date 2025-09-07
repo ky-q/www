@@ -1,0 +1,25 @@
+class CFG:
+    EXCEL_PATH = './data/附件.xlsx'
+    SHEET_NAME = '男胎检测数据'
+    COL_ID = '孕妇代码'
+    COL_BMI = '孕妇BMI'
+    THRESHOLD = 0.04
+    CONF_LEVEL = 0.99
+    SIGMA_M = 0.1
+    SIGMA_M_LIST = [0.0, 0.1, 0.2]
+    MAX_BMI_POINTS = 250
+    RISK_EARLY = 1.0
+    RISK_MID = 2.0
+    RISK_LATE = 4.0
+    RETEST_COST = 1.5
+    VISIT_INTERVAL = 1.0
+    MAX_RETESTS = 10
+    FIRST_VISIT_COST = 0.0
+    COVERAGE_TARGET = 0.85
+    COVERAGE_PENALTY_WEIGHT = 100.0
+    N_GROUPS = 3
+    MIN_SEG_SIZE = 5
+    T_MIN = 10.0
+    T_MAX = 30.0
+    STEP = 0.05
+    OUT_DIR = './output/Q3/'

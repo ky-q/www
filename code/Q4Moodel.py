@@ -143,14 +143,20 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
         alpha = np.clip(a0 + a1*qc, 0.0, 1.0)
         return alpha*s + (1.0 - alpha)*p_lr
     def cost_metric(y_true, p_fused, tau_low, tau_high):
+        # 将边界向外推 1 个 ULP（机器精度单位）
+        hi = np.nextafter(np.float64(tau_high), np.float64(np.inf))   # 稍微抬高高阈值
+        lo = np.nextafter(np.float64(tau_low),  -np.float64(np.inf))  # 稍微降低低阈值
+
         pred = np.full_like(y_true, fill_value=-1)
-        pred[p_fused >= tau_high] = 1
-        pred[p_fused <= tau_low] = 0
-        FP = int(np.sum((y_true==0) & (pred==1)))
-        FN = int(np.sum((y_true==1) & (pred==0)))
-        N_abst = int(np.sum(pred==-1))
+        pred[p_fused >= hi] = 1
+        pred[p_fused <= lo] = 0
+
+        FP = int(np.sum((y_true == 0) & (pred == 1)))
+        FN = int(np.sum((y_true == 1) & (pred == 0)))
+        N_abst = int(np.sum(pred == -1))
         N = len(y_true)
-        return (c_fn*FN + c_fp*FP + c_abst*N_abst)/max(N,1), FP, FN, N_abst
+        return ((c_fn*FN + c_fp*FP + c_abst*N_abst) / max(N, 1), FP, FN, N_abst)
+
     a0_grid = np.linspace(0.0, 0.6, 7)
     a1_grid = np.linspace(0.0, 1.0, 6)
     tau_low_grid = np.linspace(0.05, 0.40, 18)
