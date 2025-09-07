@@ -5,8 +5,7 @@ from statsmodels.regression.mixed_linear_model import MixedLM
 from patsy import dmatrix
 from config.constant import CFG
 from tools.data_process import convert_pregnancy_week, logit_clip, drop_near_constant_and_collinear
-from tools.data_analyse import wald_joint
-from tools.data_analyse import draw_q1_pics
+from tools.data_analyse import wald_joint, draw_gest_distribution, draw_q1_pics
 
 def load_data(excel_path, sheet_name, col_id, col_ga, col_bmi, col_y):
     df = pd.read_excel(excel_path, sheet_name=sheet_name).copy()
@@ -48,6 +47,7 @@ def main(
     # === 1) 读取 & 预处理 ===
     df = load_data(excel_path, sheet_name, col_id, col_ga, col_bmi, col_y)
 
+    draw_gest_distribution(excel_path, sheet_name, col_id)    
     # === 2) 设计矩阵：孕周的 B 样条 + BMI (+ 可选交互) ===
     uniq = np.unique(df["gest_weeks"])
     if df_spline is None:

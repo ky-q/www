@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from patsy import dmatrix
 from config.constant import CFG
@@ -31,6 +32,22 @@ def wald_joint(names, m, X):
         except Exception:
             return None
         
+def draw_gest_distribution(excel_path, sheet_name, col_id):
+    df = pd.read_excel(excel_path, sheet_name=sheet_name)
+    sample_counts = df[col_id].value_counts()
+    print(sample_counts)
+    # 统计每个样本数量的孕妇代码数量
+    count_distribution = sample_counts.value_counts().sort_index()
+    print(count_distribution)
+    # 绘制每个样本数量的孕妇代码数量分布直方图
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=count_distribution.index, y=count_distribution.values, palette="viridis")
+    plt.xlabel('孕妇检验次数')
+    plt.ylabel('数量')
+    plt.title('孕妇检验次数分布')
+    plt.grid(axis='y', alpha=0.75)
+    plt.savefig(CFG.Q1PicPath + 'gest_distribution.png')
+    plt.show()
         
 def draw_q1_pics(df, m, X, spline_test, k, use_tensor_interact, save_dir):
     # 可视化 1：系数森林图（固定效应，95% CI，高亮显著性）
