@@ -5,10 +5,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 
-# 全局字体设置，优先使用系统里的中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']  # 黑体 或 微软雅黑
-plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
-
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei'] 
+plt.rcParams['axes.unicode_minus'] = False 
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -21,43 +19,43 @@ from sklearn.metrics import (
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# ---------------- 工具函数 ----------------
 def find_col(df, patterns):
-    """按正则列表匹配列名，返回第一个命中（不区分大小写）。"""
+    colnames = df.columns
     for p in patterns:
         regex = re.compile(p, flags=re.I)
-        for c in df.columns:
-            if re.search(regex, str(c)):
+        for c in colnames:
+            str_c = str(c)
+            if re.search(regex, str_c):
                 return c
     return None
 
-def to_num(s):
-    return pd.to_numeric(s, errors="coerce")
+def to_number(series):
+    return pd.to_numeric(series, errors="coerce")
 
-def clip01(x):
-    return np.maximum(0.0, np.minimum(1.0, x))
+def clip_0_1(arr):
+    arr = np.where(arr < 0, 0.0, arr)
+    arr = np.where(arr > 1, 1.0, arr)
+    return arr
 
 def calibration_curve_bins(y_true, p_pred, n_bins=10):
-    """用于可靠性（校准）曲线的分箱统计。"""
-    dfc = pd.DataFrame({'y': y_true, 'p': p_pred}).dropna()
-    if dfc.empty:
+    df = pd.DataFrame({'y': y_true, 'p': p_pred}).dropna()
+    if df.empty:
         return np.array([]), np.array([]), np.array([])
     try:
-        dfc['bin'] = pd.qcut(dfc['p'], q=n_bins, duplicates='drop')
+        df['bin'] = pd.qcut(df['p'], q=n_bins, duplicates='drop')
     except Exception:
-        dfc['bin'] = pd.cut(dfc['p'], bins=np.linspace(0,1,n_bins+1), include_lowest=True)
-    grp = dfc.groupby('bin')
-    x = grp['p'].mean().values
-    yb = grp['y'].mean().values
-    n = grp.size().values
-    return x, yb, n
+        edges = np.linspace(0, 1, n_bins + 1)
+        df["bin"] = pd.cut(df["p"], bins=edges, include_lowest=True)
+    grouped = df.groupby("bin")
+    avg_p = grouped["p"].mean().values      
+    avg_y = grouped["y"].mean().values     
+    count = grouped.size().values          
+    return avg_p, avg_y, count
 
-# ---------------- 数据准备 ----------------
 def build_dataset(xlsx_path):
     df = pd.read_excel(xlsx_path)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # 自动映射列名（中文为主，留英文备选）
     col_Z13 = find_col(df, [r"13.*Z值", r"13号.*Z", r"Z.*13", r"chr.?13.*Z"])
     col_Z18 = find_col(df, [r"18.*Z值", r"18号.*Z", r"Z.*18", r"chr.?18.*Z"])
     col_Z21 = find_col(df, [r"21.*Z值", r"21号.*Z", r"Z.*21", r"chr.?21.*Z"])
@@ -79,80 +77,78 @@ def build_dataset(xlsx_path):
         'label': col_label
     }
 
-    if not mapping['label']:
-        raise ValueError("未找到标签列（包含“非整倍体/异常/label”等字样）。请检查表头或手动指定。")
-
-    # 标签：出现 T13/T18/T21 即阳性
     y_text = df[mapping['label']].astype(str).fillna("").str.upper()
-    y_bin = (y_text.str.contains("T13") | y_text.str.contains("T18") | y_text.str.contains("T21")).astype(int)
+    y_bin = (y_text.str.contains("T13") | 
+             y_text.str.contains("T18") | 
+             y_text.str.contains("T21")).astype(int)
 
-    # 构造数字特征表
     data = pd.DataFrame({
         'y': y_bin,
-        'Z13': to_num(df[mapping['Z13']]) if mapping['Z13'] else np.nan,
-        'Z18': to_num(df[mapping['Z18']]) if mapping['Z18'] else np.nan,
-        'Z21': to_num(df[mapping['Z21']]) if mapping['Z21'] else np.nan,
-        'ZX':  to_num(df[mapping['ZX']])  if mapping['ZX']  else np.nan,
-        'GC_13': to_num(df[mapping['GC_13']]) if mapping['GC_13'] else np.nan,
-        'GC_18': to_num(df[mapping['GC_18']]) if mapping['GC_18'] else np.nan,
-        'GC_21': to_num(df[mapping['GC_21']]) if mapping['GC_21'] else np.nan,
-        'dup': to_num(df[mapping['dup']]) if mapping['dup'] else np.nan,
-        'badratio': to_num(df[mapping['badratio']]) if mapping['badratio'] else np.nan,
-        'BMI': to_num(df[mapping['BMI']]) if mapping['BMI'] else np.nan,
+        'Z13': to_number(df[mapping['Z13']]) if mapping['Z13'] else np.nan,
+        'Z18': to_number(df[mapping['Z18']]) if mapping['Z18'] else np.nan,
+        'Z21': to_number(df[mapping['Z21']]) if mapping['Z21'] else np.nan,
+        'ZX':  to_number(df[mapping['ZX']])  if mapping['ZX']  else np.nan,
+        'GC_13': to_number(df[mapping['GC_13']]) if mapping['GC_13'] else np.nan,
+        'GC_18': to_number(df[mapping['GC_18']]) if mapping['GC_18'] else np.nan,
+        'GC_21': to_number(df[mapping['GC_21']]) if mapping['GC_21'] else np.nan,
+        'dup': to_number(df[mapping['dup']]) if mapping['dup'] else np.nan,
+        'badratio': to_number(df[mapping['badratio']]) if mapping['badratio'] else np.nan,
+        'BMI': to_number(df[mapping['BMI']]) if mapping['BMI'] else np.nan,
     })
 
-    # 关键 Z 值必须有
     data = data.dropna(subset=['Z13','Z18','Z21'], how='any').reset_index(drop=True)
 
-    # 安全填充：整列 NaN → 删除；其余列用中位数填补
-    for c in list(data.columns):
-        if c == 'y':
+    for col in list(data.columns):
+        if col == 'y':
             continue
-        vals = data[c].values.astype(float)
-        if np.all(np.isnan(vals)):
-            data.drop(columns=[c], inplace=True)
+        arr = data[col].values.astype(float)
+        if np.all(np.isnan(arr)):
+            data.drop(columns=[col], inplace=True)
         else:
-            med = np.nanmedian(vals)
-            data[c] = np.where(np.isnan(vals), med, vals)
+            med = np.nanmedian(arr)
+            data[col] = np.where(np.isnan(arr), med, arr)
 
-    # 强证据 s：任一 |Z_k|≥3
-    Z_mat = data[['Z13','Z18','Z21']].values
-    data['s'] = (np.abs(Z_mat).max(axis=1) >= 3).astype(int)
+    Z_value = data[['Z13','Z18','Z21']].values
+    data['s'] = (np.abs(Z_value).max(axis=1) >= 3).astype(int)
 
-    # 质量分 QC（GC 偏离 + 重复率 + 过滤比）
-    def qscale_neg(s):
-        # 数值越大越差 → 转为 [0,1] 中“越大越好”
-        p10 = np.nanpercentile(s, 10)
-        p90 = np.nanpercentile(s, 90)
-        return clip01(1 - (s - p10) / (p90 - p10 + 1e-6))
+    def score_from_large_is_bad(x):
+        p10 = np.nanpercentile(x, 10)
+        p90 = np.nanpercentile(x, 90)
+        return clip_0_1(1 - (x - p10) / (p90 - p10 + 1e-6))
 
-    if all(col in data.columns for col in ['GC_13','GC_18','GC_21']):
-        GC_avg = data[['GC_13','GC_18','GC_21']].mean(axis=1)
-        GC_dev = np.abs(GC_avg - 0.5)
-        gc_score = clip01(1 - np.maximum(0, GC_dev - 0.10)*5)  # 40%~60% 近似满分
+    if all(name in data.columns for name in ['GC_13','GC_18','GC_21']):
+        GC_mean = data[['GC_13','GC_18','GC_21']].mean(axis=1)
+        GC_dev = np.abs(GC_mean - 0.5)
+        gc_score = clip_0_1(1 - np.maximum(0, GC_dev - 0.10)*5)  
     else:
-        gc_score = np.ones(len(data)) * 0.8  # 若无 GC 列，给温和分
+        gc_score = np.ones(len(data)) * 0.8 
 
-    dup_s  = qscale_neg(data['dup']) if 'dup' in data.columns else np.ones(len(data))*0.8
-    badr_s = qscale_neg(data['badratio']) if 'badratio' in data.columns else np.ones(len(data))*0.8
+    if "dup" in data.columns:
+        dup_score = score_from_large_is_bad(data["dup"])
+    else:
+        dup_score = np.full(len(data), 0.8)
 
-    data['QC'] = clip01(0.7*gc_score + 0.2*dup_s + 0.1*badr_s)
+    if "badratio" in data.columns:
+        badr_score = score_from_large_is_bad(data["badratio"])
+    else:
+        badr_score = np.full(len(data), 0.8)
+
+    QC = 0.7 * gc_score + 0.2 * dup_score + 0.1 * badr_score
+    data["QC"] = np.clip(QC, 0.0, 1.0)
 
     return data, mapping
 
-# ---------------- 训练与评估 ----------------
 def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     os.makedirs(outdir, exist_ok=True)
 
-    # 动态特征选择：仅保留真实存在且非全 NaN 的列
-    candidate_feats = ['Z13','Z18','Z21','ZX','GC_13','GC_18','GC_21','dup','badratio','BMI']
-    feat_cols = [c for c in candidate_feats if c in data.columns and not np.all(np.isnan(data[c].values))]
+    candidates = ['Z13','Z18','Z21','ZX','GC_13','GC_18','GC_21','dup','badratio','BMI']
+    feat_cols = [col for col in candidates 
+                 if (col in data.columns) and (not np.all(np.isnan(data[col].values)))]
     X_all = data[feat_cols].fillna(0.0).values
     s_all = data['s'].values
     qc_all= data['QC'].values
     y_all = data['y'].values
 
-    # 分层切分：train/valid/test = 0.6/0.2/0.2
     X_tr, X_te, y_tr, y_te, s_tr, s_te, qc_tr, qc_te = train_test_split(
         X_all, y_all, s_all, qc_all, test_size=0.2, random_state=seed, stratify=y_all
     )
@@ -165,17 +161,15 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     X_vas = scaler.transform(X_va)
     X_tes = scaler.transform(X_te)
 
-    # L1-Logit + 等温校准（新旧版本兼容）
     base_lr = LogisticRegression(penalty='l1', solver='liblinear', max_iter=400, class_weight='balanced')
     try:
-        cal_lr = CalibratedClassifierCV(estimator=base_lr, method='isotonic', cv=3)  # 新版 sklearn
+        calibrated = CalibratedClassifierCV(estimator=base_lr, method='isotonic', cv=3)  # 新版 sklearn
     except TypeError:
-        cal_lr = CalibratedClassifierCV(base_estimator=base_lr, method='isotonic', cv=3)  # 旧版 sklearn
-    cal_lr.fit(X_trs, y_tr)
-    p_lr_va = cal_lr.predict_proba(X_vas)[:,1]
-    p_lr_te = cal_lr.predict_proba(X_tes)[:,1]
+        calibrated = CalibratedClassifierCV(base_estimator=base_lr, method='isotonic', cv=3)  # 旧版 sklearn
+    calibrated.fit(X_trs, y_tr)
+    p_lr_va = calibrated.predict_proba(X_vas)[:,1]
+    p_lr_te = calibrated.predict_proba(X_tes)[:,1]
 
-    # 融合与代价
     def fuse_prob(p_lr, s, qc, a0, a1):
         alpha = np.clip(a0 + a1*qc, 0.0, 1.0)
         return alpha*s + (1.0 - alpha)*p_lr
@@ -190,7 +184,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
         N = len(y_true)
         return (c_fn*FN + c_fp*FP + c_abst*N_abst)/max(N,1), FP, FN, N_abst
 
-    # 网格搜索 (a0, a1, tau_low, tau_high)
     a0_grid = np.linspace(0.0, 0.6, 7)
     a1_grid = np.linspace(0.0, 1.0, 6)
     tau_low_grid = np.linspace(0.05, 0.40, 18)
@@ -212,7 +205,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
 
     best_cost, (best_a0,best_a1,best_tl,best_th) = best
 
-    # 测试集评估
     p_te = fuse_prob(p_lr_te, s_te, qc_te, best_a0, best_a1)
     test_cost, FP, FN, N_abst = cost_metric(y_te, p_te, best_tl, best_th)
 
@@ -222,15 +214,12 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     auprc = average_precision_score(y_te, p_te)
     brier = brier_score_loss(y_te, p_te)
 
-    # 混淆矩阵（非灰区）
     pred_te = np.full_like(y_te, fill_value=-1)
     pred_te[p_te >= best_th] = 1
     pred_te[p_te <= best_tl] = 0
     mask_eval = pred_te!=-1
     cm = confusion_matrix(y_te[mask_eval], pred_te[mask_eval], labels=[0,1])
 
-    # ---------- 作图（每张单独画布） ----------
-    # ROC 曲线
     plt.figure()
     plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}")
     plt.plot([0,1],[0,1], linestyle='--', label="随机")
@@ -242,7 +231,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     plt.savefig(os.path.join(outdir, "Q4_s1_ROC.png"), dpi=180)
     plt.close()
 
-    # PR 曲线
     plt.figure()
     plt.plot(rec, prec, label=f"AUPRC = {auprc:.3f}")
     plt.xlabel("召回率 (Recall)")
@@ -253,7 +241,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     plt.savefig(os.path.join(outdir, "Q4_s1_PR.png"), dpi=180)
     plt.close()
 
-    # 校准曲线
     xcal, ycal, ncal = calibration_curve_bins(y_te, p_te, n_bins=10)
     plt.figure()
     plt.plot([0,1],[0,1], linestyle='--', label="理想校准线")
@@ -267,7 +254,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     plt.savefig(os.path.join(outdir, "Q4_s1_calibration.png"), dpi=180)
     plt.close()
 
-    # 代价热力图
     p_va_best_alpha = fuse_prob(p_lr_va, s_va, qc_va, best_a0, best_a1)
     TL, TH = np.meshgrid(tau_low_grid, tau_high_grid)
     cost_grid = np.zeros_like(TL, dtype=float)
@@ -290,7 +276,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     plt.savefig(os.path.join(outdir, "Q4_s1_cost_heatmap.png"), dpi=180)
     plt.close()
 
-    # 系数条形图
     base_for_coef = LogisticRegression(penalty='l1', solver='liblinear',
                                     max_iter=400, class_weight='balanced')
     base_for_coef.fit(StandardScaler().fit_transform(X_tr), y_tr)
@@ -305,7 +290,6 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     plt.savefig(os.path.join(outdir, "Q4_s1_coefficients.png"), dpi=180)
     plt.close()
 
-    # ---------- 导出 CSV ----------
     summary = pd.DataFrame({
         'metric': ['AUC','AUPRC','Brier','Best a0','Best a1','tau_low','tau_high','Test cost','FP','FN','Gray (abstain)','Eval samples'],
         'value':  [roc_auc, auprc, brier, best_a0, best_a1, best_tl, best_th, test_cost, FP, FN, N_abst, int(mask_eval.sum())]
@@ -315,13 +299,11 @@ def train_and_eval(data, outdir, c_fn=20.0, c_fp=1.0, c_abst=2.0, seed=42):
     rec_df = pd.DataFrame(records, columns=['a0','a1','tau_low','tau_high','cost','FP','FN','N_abst'])
     rec_df.to_csv(os.path.join(outdir, "Q4_scheme1_val_gridsearch.csv"), index=False)
 
-    # 返回结果
     return {
         'best_params': {'a0':best_a0,'a1':best_a1,'tau_low':best_tl,'tau_high':best_th,'val_cost':best_cost},
         'test_metrics': {'AUC':roc_auc,'AUPRC':auprc,'Brier':brier,'Test_cost':test_cost,'FP':FP,'FN':FN,'Gray':N_abst,'Eval_samples':int(mask_eval.sum())}
     }
 
-# ---------------- 主函数 ----------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", type=str,
